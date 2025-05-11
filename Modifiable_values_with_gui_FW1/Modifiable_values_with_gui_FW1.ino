@@ -5,7 +5,7 @@
 #define MPU6050_I2C_ADDRESS 0x68
 
 // EEPROM configuration
-#define EEPROM_SIZE 12  // 3 floats (4 bytes each)
+#define EEPROM_SIZE 12
 #define ACCEL_FILTER_ADDR 0
 #define GYRO_FILTER_ADDR 4
 #define COMP_FILTER_ADDR 8
@@ -18,7 +18,7 @@ float FREQ = 50.0;
 
 // Hardware pins
 const int ledPin = 2;
-const int servoPitchPin = 13;  // GPIO pins for servos
+const int servoPitchPin = 13;
 const int servoRollPin = 12;
 const int servoYawPin = 14;
 
@@ -26,26 +26,31 @@ const int servoYawPin = 14;
 Servo servoPitch;
 Servo servoRoll;
 Servo servoYaw;
-const int SERVO_MIN_US = 1000;   // Minimum PWM pulse width
-const int SERVO_MAX_US = 2000;   // Maximum PWM pulse width
-const int SERVO_NEUTRAL = 1500;  // Neutral position (90 degrees)
+const int SERVO_MIN_US = 1000;
+const int SERVO_MAX_US = 2000;
+const int SERVO_NEUTRAL = 1500;
 
 // Sensor variables
-double gSensitivity = 65.5;  // Gyro sensitivity (LSB/°/sec)
-double gx = 0, gy = 0, gz = 0;  // Filtered angles (roll, pitch, yaw)
-double gyrX = 0, gyrY = 0, gyrZ = 0;  // Raw gyro readings
-double gyrXoffs = 0, gyrYoffs = 0, gyrZoffs = 0;  // Gyro offsets
-int16_t accX = 0, accY = 0, accZ = 0;  // Raw accelerometer readings
+double gSensitivity = 65.5;
+double gx = 0, gy = 0, gz = 0;
+double gyrX = 0, gyrY = 0, gyrZ = 0;
+double gyrXoffs = 0, gyrYoffs = 0, gyrZoffs = 0;
+int16_t accX = 0, accY = 0, accZ = 0;
 
-// Filtered sensor values
+// Filtered values
 double filtered_ax = 0, filtered_ay = 0, filtered_az = 0;
 double filtered_gx = 0, filtered_gy = 0, filtered_gz = 0;
+
+// Connection tracking
+unsigned long lastSerialActivity = 0;
+const unsigned long SERIAL_TIMEOUT = 2000;
+bool standaloneMode = true;
 
 void setup() {
   Serial.begin(38400);
   pinMode(ledPin, OUTPUT);
   
-  // Initialize servos
+  // Initialize servos with proper timer allocation
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
@@ -59,7 +64,7 @@ void setup() {
   servoRoll.attach(servoRollPin, SERVO_MIN_US, SERVO_MAX_US);
   servoYaw.attach(servoYawPin, SERVO_MIN_US, SERVO_MAX_US);
   
-  // Center servos at startup
+  // Center servos
   servoPitch.writeMicroseconds(SERVO_NEUTRAL);
   servoRoll.writeMicroseconds(SERVO_NEUTRAL);
   servoYaw.writeMicroseconds(SERVO_NEUTRAL);
@@ -70,41 +75,95 @@ void setup() {
   loadParameters();
   
   // Configure MPU6050
-  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x6b, 0x00);  // Wake up
-  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1a, 0x06);  // DLPF config
-  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1b, 0x08);  // Gyro ±500°/s
-  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1c, 0x08);  // Accel ±4g
+  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x6B, 0x00);
+  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1A, 0x06);
+  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1B, 0x08);
+  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x1C, 0x08);
   
   uint8_t sample_div = (1000 / FREQ) - 1;
-  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x19, sample_div);  // Sample rate
+  i2c_write_reg(MPU6050_I2C_ADDRESS, 0x19, sample_div);
   
   // Calibrate gyro
-  digitalWrite(ledPin, HIGH);
   calibrate();
-  digitalWrite(ledPin, LOW);
 }
 
 void loop() {
+  Serial.print("Inside loop\n");
   static unsigned long last_time = millis();
+  static unsigned long lastBlink = 0;
   
+  // Handle connection state
+  if (millis() - lastSerialActivity > SERIAL_TIMEOUT) {
+    if (!standaloneMode) {
+      standaloneMode = true;
+      loadParameters(); // Revert to EEPROM values
+    }
+  }
+  
+  // LED status indication
+  unsigned long blinkInterval = standaloneMode ? 200 : 1000;
+  if (millis() - lastBlink > blinkInterval) {
+    digitalWrite(ledPin, !digitalRead(ledPin));
+    lastBlink = millis();
+  }
+
   // Handle serial commands
-  if (Serial.available()) {
+  checkSerialCommands();
+  
+  // Read and process sensor data
+  read_sensor_data();
+  
+  // Apply filters
+  filtered_ax = filtered_ax * (1.0 - ACCEL_FILTER) + accX * ACCEL_FILTER;
+  filtered_ay = filtered_ay * (1.0 - ACCEL_FILTER) + accY * ACCEL_FILTER;
+  filtered_az = filtered_az * (1.0 - ACCEL_FILTER) + accZ * ACCEL_FILTER;
+  
+  filtered_gx = filtered_gx * (1.0 - GYRO_FILTER) + gyrX * GYRO_FILTER;
+  filtered_gy = filtered_gy * (1.0 - GYRO_FILTER) + gyrY * GYRO_FILTER;
+  filtered_gz = filtered_gz * (1.0 - GYRO_FILTER) + gyrZ * GYRO_FILTER;
+  
+  // Calculate angles
+  double ay = atan2(filtered_ax, sqrt(pow(filtered_ay, 2) + pow(filtered_az, 2))) * 180 / M_PI;
+  double ax = atan2(filtered_ay, sqrt(pow(filtered_ax, 2) + pow(filtered_az, 2))) * 180 / M_PI;
+  
+  // Integrate gyro rates
+  gx = gx + filtered_gx / FREQ;
+  gy = gy - filtered_gy / FREQ;
+  gz = gz + filtered_gz / FREQ;
+  
+  // Apply complementary filter
+  gx = gx * (1.0 - COMP_FILTER) + ax * COMP_FILTER;
+  gy = gy * (1.0 - COMP_FILTER) + ay * COMP_FILTER;
+  
+  // Update servos
+  updateServos();
+
+  // Maintain timing
+  while (millis() - last_time < (1000 / FREQ)) {
+    delay(1);
+  }
+  last_time = millis();
+}
+
+void checkSerialCommands() {
+  while (Serial.available()) {
+    lastSerialActivity = millis();
+    standaloneMode = false;
+    
     char cmd = Serial.read();
     
-    if (cmd == '.') {  // Report current angles
+    if (cmd == '.') {  // Print current angles
       Serial.print(gx, 2); Serial.print(", ");
       Serial.print(gy, 2); Serial.print(", ");
       Serial.println(gz, 2);
     }
-    else if (cmd == 'z') {  // Reset yaw
+    else if (cmd == 'z') {  // Zero yaw
       gz = 0;
     }
-    else if (cmd == 'c') {  // Recalibrate
-      digitalWrite(ledPin, HIGH);
+    else if (cmd == 'c') {  // Calibrate gyro
       calibrate();
-      digitalWrite(ledPin, LOW);
     }
-    else if (cmd == 'p') {  // Update parameters
+    else if (cmd == 'p') {  // Receive new parameters
       String params = Serial.readStringUntil('\n');
       int comma1 = params.indexOf(',');
       int comma2 = params.indexOf(',', comma1+1);
@@ -133,45 +192,16 @@ void loop() {
       Serial.print(",");
       Serial.println(COMP_FILTER, 4);
     }
+    else if (cmd == 'x') {  // Custom signal to return to standalone mode
+      standaloneMode = true;
+      lastSerialActivity = 0;  // Reset timer
+      Serial.end();           // Optional: close serial to prevent stalling
+    }
   }
-  
-  // Read and process sensor data
-  read_sensor_data();
-  
-  // Apply low-pass filters
-  filtered_ax = filtered_ax * (1.0 - ACCEL_FILTER) + accX * ACCEL_FILTER;
-  filtered_ay = filtered_ay * (1.0 - ACCEL_FILTER) + accY * ACCEL_FILTER;
-  filtered_az = filtered_az * (1.0 - ACCEL_FILTER) + accZ * ACCEL_FILTER;
-  
-  filtered_gx = filtered_gx * (1.0 - GYRO_FILTER) + gyrX * GYRO_FILTER;
-  filtered_gy = filtered_gy * (1.0 - GYRO_FILTER) + gyrY * GYRO_FILTER;
-  filtered_gz = filtered_gz * (1.0 - GYRO_FILTER) + gyrZ * GYRO_FILTER;
-  
-  // Calculate angles from accelerometer
-  double ay = atan2(filtered_ax, sqrt(pow(filtered_ay, 2) + pow(filtered_az, 2))) * 180 / M_PI;
-  double ax = atan2(filtered_ay, sqrt(pow(filtered_ax, 2) + pow(filtered_az, 2))) * 180 / M_PI;
-  
-  // Integrate gyro rates
-  gx = gx + filtered_gx / FREQ;
-  gy = gy - filtered_gy / FREQ;
-  gz = gz + filtered_gz / FREQ;
-  
-  // Apply complementary filter
-  gx = gx * (1.0 - COMP_FILTER) + ax * COMP_FILTER;
-  gy = gy * (1.0 - COMP_FILTER) + ay * COMP_FILTER;
-  
-  // Control servos based on angles
-  updateServos();
-  
-  // Maintain consistent loop timing
-  while (millis() - last_time < (1000 / FREQ)) {
-    delay(1);
-  }
-  last_time = millis();
 }
 
 void updateServos() {
-  // Map angles to servo microseconds (adjust ranges as needed)
+  // Map angles to servo microseconds
   int pitchUs = map(gy, -90, 90, SERVO_MIN_US, SERVO_MAX_US);
   int rollUs = map(gx, -90, 90, SERVO_MIN_US, SERVO_MAX_US);
   int yawUs = map(gz, -90, 90, SERVO_MIN_US, SERVO_MAX_US);
@@ -188,14 +218,25 @@ void updateServos() {
 }
 
 void loadParameters() {
-  EEPROM.get(ACCEL_FILTER_ADDR, ACCEL_FILTER);
-  EEPROM.get(GYRO_FILTER_ADDR, GYRO_FILTER);
-  EEPROM.get(COMP_FILTER_ADDR, COMP_FILTER);
+  // Try reading multiple times if needed
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(ACCEL_FILTER_ADDR, ACCEL_FILTER);
+    EEPROM.get(GYRO_FILTER_ADDR, GYRO_FILTER);
+    EEPROM.get(COMP_FILTER_ADDR, COMP_FILTER);
+    
+    // Validate loaded values
+    if (!isnan(ACCEL_FILTER) && ACCEL_FILTER > 0 && ACCEL_FILTER <= 1.0 &&
+        !isnan(GYRO_FILTER) && GYRO_FILTER > 0 && GYRO_FILTER <= 1.0 &&
+        !isnan(COMP_FILTER) && COMP_FILTER > 0 && COMP_FILTER <= 1.0) {
+      return;
+    }
+    delay(10);
+  }
   
-  // Validate loaded values
-  if (isnan(ACCEL_FILTER) || ACCEL_FILTER <= 0 || ACCEL_FILTER > 1.0) ACCEL_FILTER = 0.3;
-  if (isnan(GYRO_FILTER) || GYRO_FILTER <= 0 || GYRO_FILTER > 1.0) GYRO_FILTER = 0.08;
-  if (isnan(COMP_FILTER) || COMP_FILTER <= 0 || COMP_FILTER > 1.0) COMP_FILTER = 0.7;
+  // Fallback to defaults if still invalid
+  ACCEL_FILTER = 0.3;
+  GYRO_FILTER = 0.08;
+  COMP_FILTER = 0.7;
 }
 
 void saveParameters() {
@@ -224,7 +265,7 @@ void calibrate() {
 
 void read_sensor_data() {
   uint8_t i2cData[14];
-  if (i2c_read(MPU6050_I2C_ADDRESS, 0x3b, i2cData, 14) != 0) return;
+  if (i2c_read(MPU6050_I2C_ADDRESS, 0x3B, i2cData, 14) != 0) return;
   
   accX = ((i2cData[0] << 8) | i2cData[1]);
   accY = ((i2cData[2] << 8) | i2cData[3]);

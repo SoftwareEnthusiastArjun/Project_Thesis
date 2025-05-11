@@ -1,9 +1,11 @@
 import sys
 import serial
 import time
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                            QHBoxLayout, QLabel, QSlider, QPushButton, 
-                            QDoubleSpinBox, QGroupBox, QMessageBox)
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout,
+    QHBoxLayout, QLabel, QSlider, QPushButton,
+    QDoubleSpinBox, QGroupBox, QMessageBox
+)
 from PyQt5.QtCore import Qt, QTimer
 
 class StabilizerConfigGUI(QMainWindow):
@@ -27,7 +29,7 @@ class StabilizerConfigGUI(QMainWindow):
     def init_serial(self):
         """Initialize serial connection"""
         try:
-            self.ser = serial.Serial('COM8', 38400, timeout=1)
+            self.ser = serial.Serial('COM8', 38400, timeout=1)  # Change COM port if needed
             print("Serial connection established")
         except serial.SerialException as e:
             print(f"Serial error: {e}")
@@ -65,10 +67,17 @@ class StabilizerConfigGUI(QMainWindow):
         
         self.save_btn = QPushButton("Save to EEPROM")
         self.save_btn.clicked.connect(self.save_to_eeprom)
+
+        # NEW: Safe Exit Button
+        self.exit_btn = QPushButton("Exit")
+        self.exit_btn.clicked.connect(self.safe_exit)
+        self.exit_btn.setStyleSheet("background-color: #ff4444; color: white;")
         
         btn_layout.addWidget(self.calibrate_btn)
         btn_layout.addWidget(self.reset_yaw_btn)
         btn_layout.addWidget(self.save_btn)
+        btn_layout.addWidget(self.exit_btn)  # Add Exit button
+        
         layout.addLayout(btn_layout)
 
     def create_filter_control(self, label, value, callback):
@@ -211,24 +220,32 @@ class StabilizerConfigGUI(QMainWindow):
             except Exception as e:
                 print(f"Serial read error: {e}")
 
-    def closeEvent(self, event):
-        """Handle window close event gracefully"""
-        # Stop all timers first
-        self.status_timer.stop()
-        
-        # Close serial connection if open
+    def safe_exit(self):
+        """Safely close the GUI and notify ESP32 to switch to standalone mode"""
+        # Notify ESP32 to switch to standalone mode
         if self.ser and self.ser.is_open:
             try:
-                # Send save command before closing
-                self.ser.write(b"f\n")
-                self.ser.flush()
-                time.sleep(0.1)  # Brief delay to ensure command is sent
+                self.ser.write(b"x\n")  # Custom command to ESP32
+                time.sleep(0.1)         # Give ESP32 time to process
             except:
                 pass
-            finally:
-                self.ser.close()
-        
+
+        # Stop timers
+        self.status_timer.stop()
+
+        # Close serial
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+
+        # Close GUI
+        self.close()
+        print("L1")
+
+    def closeEvent(self, event):
+        """Handle window close (X button) the same way as safe_exit()"""
+        self.safe_exit()
         event.accept()
+        print("L2")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
