@@ -117,3 +117,4 @@ if __name__ == "__main__":
     window = LEDControl()
     window.show()
     app.exec_()
+    
