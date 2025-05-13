@@ -1,0 +1,2 @@
+this ino files lets you edit add, gyro and comp fileter valus while printing what exactly is going on in serial monitor
+GUI(test) lets me connect, read and modify exiting vals and write modified vals to EEPROM permanently 
