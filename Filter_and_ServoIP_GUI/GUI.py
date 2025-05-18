@@ -10,18 +10,16 @@ class FilterGUI:
     def __init__(self, root):
         self.root = root
         root.title("ESP32 Filter Control")
-        root.geometry("450x400")
+        root.geometry("500x450")
 
         # Tabs
         self.tabs = ttk.Notebook(root)
         self.tabs.pack(expand=1, fill="both")
 
-        # Tab 1: Filter Control
         self.control_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.control_tab, text="Filter Control")
         self.build_control_tab(self.control_tab)
 
-        # Tab 2: Servo Visualization
         self.servo_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.servo_tab, text="Servo Input")
         self.build_servo_tab(self.servo_tab)
@@ -79,17 +77,29 @@ class FilterGUI:
         ttk.Button(actions_frame, text="Save to EEPROM", command=self.save_values).pack(side="right", padx=5)
 
     def build_servo_tab(self, tab):
-        servo_frame = ttk.LabelFrame(tab, text="Servo Signal Input", padding=10)
-        servo_frame.pack(padx=20, pady=30, fill="both", expand=True)
+        servo_frame = ttk.LabelFrame(tab, text="Servo Signal Inputs", padding=10)
+        servo_frame.pack(padx=20, pady=20, fill="both", expand=True)
 
-        self.pwm_canvas = tk.Canvas(servo_frame, height=30, width=300, bg="white", bd=1, relief="sunken")
-        self.pwm_canvas.pack(pady=10)
+        self.pwm_canvases = []
+        self.pwm_bars = []
+        self.pwm_labels = []
 
-        self.pwm_bar = self.pwm_canvas.create_rectangle(0, 0, 0, 30, fill="green")
-        self.pwm_text = ttk.Label(servo_frame, text="PWM: 0%", font=("Arial", 12))
-        self.pwm_text.pack()
+        for i in range(3):
+            canvas = tk.Canvas(servo_frame, height=30, width=300, bg="white", bd=1, relief="sunken")
+            canvas.pack(pady=10)
 
-        # Start streaming PWM when servo tab is opened
+            bar = canvas.create_rectangle(0, 0, 0, 30, fill="green")
+            label = ttk.Label(servo_frame, text=f"PWM {i+1}: 0%", font=("Arial", 12))
+            label.pack()
+
+            self.pwm_canvases.append(canvas)
+            self.pwm_bars.append(bar)
+            self.pwm_labels.append(label)
+
+        # Autopilot Switch Label
+        self.ap_label = ttk.Label(servo_frame, text="Auto Pilot: Unknown", font=("Arial", 12), foreground="gray")
+        self.ap_label.pack(pady=10)
+
         self.tabs.bind("<<NotebookTabChanged>>", self.on_tab_change)
 
     def connect(self):
@@ -174,23 +184,36 @@ class FilterGUI:
                         break
                     lines = data.decode().strip().split('\n')
                     for line in lines:
-                        try:
-                            if "No signal" in line:
-                                percent = 0
-                            else:
-                                percent = int(line.strip())
-                                percent = max(0, min(100, percent))
-                            self.root.after(0, self.update_pwm_bar_display, percent)
-                        except ValueError:
-                            continue
+                        if "No signal" in line:
+                            percentages = [0, 0, 0, 0]
+                        else:
+                            try:
+                                percentages = list(map(int, line.strip().split(',')))
+                                percentages = [max(0, min(100, p)) for p in percentages]
+                                if len(percentages) < 4:
+                                    percentages += [0] * (4 - len(percentages))
+                            except:
+                                continue
+                        self.root.after(0, self.update_pwm_bar_display, percentages)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("PWM Stream Error", str(e)))
+                error_msg = str(e)
+                self.root.after(0, lambda: messagebox.showerror("PWM Stream Error", error_msg))
 
         threading.Thread(target=stream_pwm, daemon=True).start()
 
-    def update_pwm_bar_display(self, percent):
-        self.pwm_canvas.coords(self.pwm_bar, 0, 0, 3 * percent, 30)
-        self.pwm_text.config(text=f"PWM: {percent}%")
+    def update_pwm_bar_display(self, percentages):
+        for i, percent in enumerate(percentages[:3]):
+            self.pwm_canvases[i].coords(self.pwm_bars[i], 0, 0, 3 * percent, 30)
+            self.pwm_labels[i].config(text=f"PWM {i+1}: {percent}%")
+
+        if len(percentages) >= 4:
+            autopilot_percent = percentages[3]
+            if 0 <= autopilot_percent <= 10:
+                self.ap_label.config(text="Auto Pilot: OFF", foreground="red")
+            elif 90 <= autopilot_percent <= 100:
+                self.ap_label.config(text="Auto Pilot: ON", foreground="green")
+            else:
+                self.ap_label.config(text="Auto Pilot: Unknown", foreground="gray")
 
 if __name__ == "__main__":
     root = tk.Tk()

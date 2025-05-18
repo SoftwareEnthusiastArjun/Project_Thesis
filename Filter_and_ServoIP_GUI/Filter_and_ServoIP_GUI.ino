@@ -21,13 +21,19 @@ const char* password = "@ajujcd@";
 WiFiServer server(12345);
 
 // ------------------- PWM Input Settings -------------------
-#define SIGNAL_PIN 15
-#define MIN_PULSE_WIDTH 900
-#define MAX_PULSE_WIDTH 2142
+#define PITCH_IP 15
+#define ROLL_IP 16
+#define YAW_IP 17
+#define AUTO_PILOT 18
+
+#define MIN_PULSE_WIDTH 999
+#define MAX_PULSE_WIDTH 1993
 #define PULSE_TIMEOUT 25000
 
-int lastPercentage = -1;
-bool signalDetected = false;
+int lastPercentage1 = -1;
+int lastPercentage2 = -1;
+int lastPercentage3 = -1;
+int lastPercentage4 = -1;
 
 // ------------------- Setup -------------------
 void setup() {
@@ -38,7 +44,10 @@ void setup() {
   EEPROM.begin(EEPROM_SIZE);
   loadParameters();
 
-  pinMode(SIGNAL_PIN, INPUT);
+  pinMode(PITCH_IP, INPUT);
+  pinMode(ROLL_IP, INPUT);
+  pinMode(YAW_IP, INPUT);
+  pinMode(AUTO_PILOT, INPUT);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
@@ -110,24 +119,37 @@ void loop() {
 
       // Stream PWM data if requested
       if (inStreamingMode) {
-        Serial.println("inside if block");
-        uint32_t pulseWidth = pulseIn(SIGNAL_PIN, HIGH, PULSE_TIMEOUT);
-        int percentage = 0;
+        uint32_t pulseWidth1 = pulseIn(PITCH_IP, HIGH, PULSE_TIMEOUT);
+        uint32_t pulseWidth2 = pulseIn(ROLL_IP, HIGH, PULSE_TIMEOUT);
+        uint32_t pulseWidth3 = pulseIn(YAW_IP, HIGH, PULSE_TIMEOUT);
+        uint32_t pulseWidth4 = pulseIn(AUTO_PILOT, HIGH, PULSE_TIMEOUT);
 
-        if (pulseWidth >= MIN_PULSE_WIDTH && pulseWidth <= MAX_PULSE_WIDTH) {
-          percentage = map(pulseWidth, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 100);
-          percentage = constrain(percentage, 0, 100);
+        int percentage1 = map(pulseWidth1, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 100);
+        int percentage2 = map(pulseWidth2, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 100);
+        int percentage3 = map(pulseWidth3, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 100);
+        int percentage4 = map(pulseWidth4, MIN_PULSE_WIDTH, MAX_PULSE_WIDTH, 0, 100);
 
-          if (percentage != lastPercentage) {
-            client.println(String(percentage));
-            Serial.print("Sent PWM %: ");
-            Serial.println(percentage);
-            Serial.println("Pulse_Width(us): ");
-            Serial.println(pulseWidth);
-            lastPercentage = percentage;
-            lastSent = millis();
-          }
-        } else if (millis() - lastSent > 2000) {
+        percentage1 = constrain(percentage1, 0, 100);
+        percentage2 = constrain(percentage2, 0, 100);
+        percentage3 = constrain(percentage3, 0, 100);
+        percentage4 = constrain(percentage4, 0, 100);
+
+        bool updated = false;
+
+        if (percentage1 != lastPercentage1 || percentage2 != lastPercentage2 || percentage3 != lastPercentage3 || percentage4 != lastPercentage4) {
+          String data = String(percentage1) + "," + String(percentage2) + "," + String(percentage3) + "," + String(percentage4);
+          client.println(data);
+          Serial.print("Sent PWM %s: ");
+          Serial.println(data);
+          lastPercentage1 = percentage1;
+          lastPercentage2 = percentage2;
+          lastPercentage3 = percentage3;
+          lastPercentage4 = percentage4;
+          lastSent = millis();
+          updated = true;
+        }
+
+        if (!updated && millis() - lastSent > 2000) {
           client.println("No signal");
           lastSent = millis();
         }
@@ -138,7 +160,10 @@ void loop() {
 
     client.stop();
     Serial.println("Client disconnected");
-    lastPercentage = -1;
+    lastPercentage1 = -1;
+    lastPercentage2 = -1;
+    lastPercentage3 = -1;
+    lastPercentage4 = -1;
   }
 
   delay(10);
