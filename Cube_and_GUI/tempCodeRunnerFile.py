@@ -1,0 +1,1 @@
+def build_visualizer_tab(self, tab):
