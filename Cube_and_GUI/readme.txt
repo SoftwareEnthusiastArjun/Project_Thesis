@@ -5,3 +5,15 @@ Now the Cube_and_GUI.ino and GUI.py can do this:
 4. See if autopilot is on/off based on pwm%
 5. read IMU sensor's filterd values 
 6. Send then to cube visualizer to see graphics
+--------------------------------
+wiring:
+SDA:D21
+SCL:D22
+VCC(MPU):3V3
+gnd
+
+ail(ch1): d15
+ele(ch2):rx2
+rud(ch4):tx2
+auto(ch5):d18
+pwr(vin),gnd
