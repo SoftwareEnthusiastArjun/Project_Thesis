@@ -4,6 +4,7 @@
 #include <WiFiServer.h>
 #include <ESPmDNS.h>
 #include <EEPROM.h>
+#include <ESP32Servo.h>  // <-- Added for Servo control
 
 // Function Prototypes
 void loadParameters();
@@ -11,6 +12,7 @@ void saveParameters();
 void calibrateMPU6050();
 void initMPU6050();
 void updateMPU6050();
+void updateServoFromMPU();
 int i2c_read(int addr, int start, uint8_t* buffer, int size);
 int i2c_write_reg(int addr, int reg, uint8_t data);
 
@@ -52,11 +54,18 @@ WiFiServer server(12345);
 #define MAX_PULSE_WIDTH 1993
 #define PULSE_TIMEOUT 25000
 
+// Servo Pins
+#define PITCH_SERVO_PIN 25
+#define ROLL_SERVO_PIN 26
+
+Servo pitchServo;
+Servo rollServo;
+
 int lastPercentage1 = -1, lastPercentage2 = -1, lastPercentage3 = -1, lastPercentage4 = -1;
 unsigned long lastMPUTime = 0;
 
 bool cubeStreaming = false;
-bool inside=false;
+bool inside = false;
 
 void setup() {
   Serial.begin(115200);
@@ -76,28 +85,45 @@ void setup() {
   pinMode(YAW_IP, INPUT);
   pinMode(AUTO_PILOT, INPUT);
 
+  pitchServo.attach(PITCH_SERVO_PIN);
+  rollServo.attach(ROLL_SERVO_PIN);
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
+  
+  unsigned long startAttemptTime = millis();
+  const unsigned long wifiTimeout = 10000; // 10 seconds
+  
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < wifiTimeout) {
     Serial.print(".");
     delay(500);
   }
-
-  Serial.println("\nConnected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-
-  if (MDNS.begin("esp32")) {
-    Serial.println("mDNS responder started: esp32.local");
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  
+    if (MDNS.begin("esp32")) {
+      Serial.println("mDNS responder started: esp32.local");
+    }
+  
+    server.begin();
+    Serial.println("TCP server started on port 12345");
+  } else {
+    Serial.println("\nWiFi connection failed. Continuing without network.");
   }
-
-  server.begin();
-  Serial.println("TCP server started on port 12345");
 }
 
 void loop() {
   WiFiClient client = server.available();
+
+  // Call regardless of client connection
+  if (millis() - lastMPUTime >= (1000 / FREQ)) {
+    lastMPUTime = millis();
+    updateServoFromMPU();
+  }
 
   if (client) {
     Serial.println("Client connected");
@@ -107,6 +133,10 @@ void loop() {
     unsigned long lastSent = 0;
 
     while (client.connected()) {
+      if (millis() - lastMPUTime >= (1000 / FREQ)) {
+        lastMPUTime = millis();
+        updateServoFromMPU();
+      }
       if (client.available()) {
         String command = client.readStringUntil('\n');
         command.trim();
@@ -133,7 +163,7 @@ void loop() {
           client.println("PWM_STREAM_START");
         } else if (command == "startCubeStream") {
           cubeStreaming = true;
-          inStreamingMode = false;  // Disable PWM stream
+          inStreamingMode = false;
           client.println("CUBE_STREAM_START");
         } else if (command == "stopCubeStream") {
           cubeStreaming = false;
@@ -143,7 +173,6 @@ void loop() {
         }
       }
 
-      // Handle PWM streaming (when inStreamingMode is true)
       if (inStreamingMode) {
         uint32_t pulseWidth1 = pulseIn(PITCH_IP, HIGH, PULSE_TIMEOUT);
         uint32_t pulseWidth2 = pulseIn(ROLL_IP, HIGH, PULSE_TIMEOUT);
@@ -169,14 +198,13 @@ void loop() {
           lastSent = millis();
         }
       }
-     // for streaming to py code
+
       if (cubeStreaming && millis() - lastMPUTime >= (1000 / FREQ)) {
         updateMPU6050();
-        gz=0;
+        gz = 0;
         client.printf("%.2f,%.2f,%.2f\n", gx, gy, gz);
         lastMPUTime = millis();
       }
-      
     }
 
     client.stop();
@@ -184,6 +212,18 @@ void loop() {
   }
 
   delay(10);
+}
+//--------------------Servo Control--------------------------
+
+void updateServoFromMPU() {
+  updateMPU6050();
+
+  // Map gy (pitch) and gx (roll) to servo angles
+  int pitchAngle = map(constrain(gy, -45, 45), -45, 45, 45, 135);
+  int rollAngle  = map(constrain(gx, -45, 45), -45, 45, 45, 135);
+
+  pitchServo.write(pitchAngle);
+  rollServo.write(rollAngle);
 }
 
 // -------------------- MPU6050 Functions --------------------
