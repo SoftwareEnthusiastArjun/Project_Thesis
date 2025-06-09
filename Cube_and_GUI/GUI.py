@@ -19,6 +19,7 @@ class FilterGUI:
         self.tabs = ttk.Notebook(root)
         self.tabs.pack(expand=1, fill="both")
 
+        # Existing tabs
         self.control_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.control_tab, text="Filter Control")
         self.build_control_tab(self.control_tab)
@@ -26,14 +27,13 @@ class FilterGUI:
         self.servo_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.servo_tab, text="Servo Input")
         self.build_servo_tab(self.servo_tab)
-
-        self.client = None
-        self.pwm_stream_thread_started = False
         
         self.visualizer_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.visualizer_tab, text="3D Visualizer")
         self.build_visualizer_tab(self.visualizer_tab)
 
+        self.client = None
+        self.pwm_stream_thread_started = False
         self.viewer = None
         self.viewer_thread = None
         self.data_queue = queue.Queue()

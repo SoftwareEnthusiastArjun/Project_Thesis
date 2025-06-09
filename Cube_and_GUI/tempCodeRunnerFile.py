@@ -1,1 +1,1 @@
-"Connection Error", f"Failed to send stopCubeStream: {e}"
+Cube Stream 
