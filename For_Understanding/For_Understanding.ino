@@ -221,7 +221,7 @@ void setup() {
 void loop() {
   WiFiClient client = server.available();  // Check for incoming TCP connections
 
-  // Main control loop running at specified frequency
+  // Main control loop running at specified frequency(once every 20ms for 50Hz)
   if (millis() - lastMPUTime >= (1000 / FREQ)) {
     lastMPUTime = millis();
     
