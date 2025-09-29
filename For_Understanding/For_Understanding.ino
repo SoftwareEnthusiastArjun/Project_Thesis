@@ -25,6 +25,9 @@ float COMP_FILTER = 0.7;
 float referencePitch = 0;
 float referenceRoll = 0;
 
+float pitchOffset = 90;  // Baseline servo center
+float rollOffset = 90;
+bool firstStabLoop = true;
 
 // PID Controller Structure
 struct PID {
@@ -206,7 +209,21 @@ void loop() {
     // Handle mode transitions
     if (isStabilizationActive != lastStabState) {
       if (isStabilizationActive) {
+        // Set reference angles
+        updateMPU6050();  
+        referencePitch = gy;
+        referenceRoll = gx;
+    
+        // Save current servo positions as offset
+        pitchOffset = pitchServo.read();
+        rollOffset = rollServo.read();
+    
+        // Reset PID controllers
+        resetPID(pitchPID);
         resetPID(rollPID);
+        
+        firstStabLoop = false;
+    
         Serial.println("Stabilization ON");
       } else {
         Serial.println("Stabilization OFF");
@@ -377,22 +394,18 @@ void loop() {
 void updateServoFromMPU() {
   updateMPU6050();
 
-  // Get current servo positions for bumpless transfer
-  float currentPitchPos = pitchServo.read();
-  float currentRollPos = rollServo.read();
+  // Calculate PID outputs relative to reference
+  float pitchOutput = computePID(pitchPID, referencePitch, -gy);
+  float rollOutput = computePID(rollPID, referenceRoll, -gx);
 
-  // Calculate PID outputs with bumpless transfer using reference orientation
-  float pitchOutput = computePID(pitchPID, referencePitch, gy, currentPitchPos - 90);
-  float rollOutput = computePID(rollPID, referenceRoll, gx, currentRollPos - 90);
-
-
-  // Map PID outputs to servo angles (90° is center)
-  int pitchAngle = constrain(90 + pitchOutput, 45, 135);
-  int rollAngle = constrain(90 + rollOutput, 45, 135);
+  // Apply output as delta from saved position
+  int pitchAngle = constrain(pitchOffset + pitchOutput, 45, 135);
+  int rollAngle = constrain(rollOffset + rollOutput, 45, 135);
 
   pitchServo.write(pitchAngle);
   rollServo.write(rollAngle);
 }
+
 
 // -------------------- MPU6050 Functions --------------------
 void initMPU6050() {
@@ -502,7 +515,8 @@ int i2c_read(int addr, int start, uint8_t* buffer, int size) {
   Wire.beginTransmission(addr);
   Wire.write(start);
   if (Wire.endTransmission(false) != 0) return -1;
-  Wire.requestFrom(addr, size, true); 
+//  Wire.requestFrom(addr, size, true); 
+  Wire.requestFrom((uint8_t)addr, (size_t)size, (bool)true);
   int i = 0;
   while (Wire.available() && i < size) buffer[i++] = Wire.read();
   return (i == size) ? 0 : -1;
